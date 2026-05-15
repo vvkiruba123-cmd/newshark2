@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+/* 1. THE BRAIN: Tell Tailwind where to look */
+@theme {
+  --color-dark-navy: #020617;
+  --color-shark-blue: #2563eb;
+  --color-card-bg: #0b1224;
+  --shadow-glow: 0 0 20px rgba(37, 99, 235, 0.3);
+}
+
+/* 2. THE BODY: Set the base dark theme */
+:root {
+  background-color: #020617;
+  color: white;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background-color: #020617;
+  /* Smooth the fonts for that premium look */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 3. THE UTILITIES: Extra glow effects for your buttons */
+@layer utilities {
+  .btn-glow {
+    box-shadow: 0 0 30px rgba(37, 99, 235, 0.4);
+  }
+  
+  .card-gradient {
+    background: linear-gradient(180deg, #0b1224 0%, #020617 100%);
+  }
+}
+
+/* 4. FIX: Ensure images/icons aren't hidden */
+img, svg {
+  display: inline-block;
+  vertical-align: middle;
+}
