@@ -2,16 +2,53 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Trophy, Brain, UserCircle, Play, CheckCircle, X, Loader2, 
   Lightbulb, Clock, ArrowLeft, Star, AlertTriangle, Info, Sparkles,
-  MessageCircle, Send, XCircle, Map, Zap
+  MessageCircle, Send, XCircle, Map, Zap, Mic, MicOff, Volume2,
+  Video, VideoOff, Code, Flame, Target, Compass, BookOpen, VolumeX
 } from 'lucide-react';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-// src/App.jsx
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
+
+// Native Web Audio Synthesizer for SFX
+const playSFX = (type) => {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    if (type === 'click') {
+      osc.frequency.setValueAtTime(400, ctx.currentTime);
+      gain.gain.setValueAtTime(0.05, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.05);
+    } else if (type === 'success') {
+      osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(659.25, ctx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.2);
+    } else if (type === 'warn') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(220, ctx.currentTime);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.15);
+    }
+  } catch (e) {
+    // Ignore audio failures if context is restricted by browser
+  }
+};
+
 const App = () => {
   // --- STATE ---
   const [view, setView] = useState('landing'); 
   const [level, setLevel] = useState('Beginner'); 
+  const [role, setRole] = useState('Frontend Developer');
   const [category, setCategory] = useState(null); 
   const [questions, setQuestions] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -19,9 +56,26 @@ const App = () => {
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [dailyTask, setDailyTask] = useState(null);
+  const [showSolutionModal, setShowSolutionModal] = useState(false);
   
-  // Progress Journey (Leveling System)
+  // Audio & Speech Recognition State
+  const [isListening, setIsListening] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  // Camera State
+  const [isCamActive, setIsCamActive] = useState(false);
+  const videoRef = useRef(null);
+
+  // Scratchpad State
+  const [scratchpad, setScratchpad] = useState('');
+  const [showScratchpad, setShowScratchpad] = useState(false);
+
+  // Gamification & Streak State
   const [points, setPoints] = useState(150); 
+  const [streak, setStreak] = useState(3);
+  const [badges, setBadges] = useState(['Early Bird', 'First Swim']);
+  
   const userRank = points < 300 ? 'Novice' : points < 800 ? 'Pro' : 'Master Shark';
 
   // Timer State
@@ -30,6 +84,7 @@ const App = () => {
 
   // Shark Chatbot State
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [sharkPersona, setSharkPersona] = useState('funny');
   const [chatInput, setChatInput] = useState("");
   const [chatHistory, setChatHistory] = useState([
     { role: 'bot', text: "Hey chum! I'm Shark 🦈. Need help with an interview or just feeling like a fish out of water? Ask me anything!" }
@@ -37,16 +92,87 @@ const App = () => {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const chatEndRef = useRef(null);
 
+  // --- SPEECH RECOGNITION SETUP ---
+  useEffect(() => {
+    if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+      setSpeechSupported(true);
+    }
+  }, []);
+
+  const toggleListening = () => {
+    if (!speechSupported) return;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+
+    if (!isListening) {
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => setIsListening(true);
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        setUserAnswers(prev => ({
+          ...prev,
+          [currentIndex]: (prev[currentIndex] || '') + ' ' + transcript
+        }));
+      };
+      recognition.onerror = () => setIsListening(false);
+      recognition.onend = () => setIsListening(false);
+      recognition.start();
+    } else {
+      setIsListening(false);
+    }
+  };
+
+  const speakText = (text) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+
+    if (isSpeaking) {
+      setIsSpeaking(false);
+      return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+    setIsSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // --- CAMERA SETUP ---
+  const toggleCam = async () => {
+    if (isCamActive) {
+      if (videoRef.current && videoRef.current.srcObject) {
+        videoRef.current.srcObject.getTracks().forEach(track => track.stop());
+      }
+      setIsCamActive(false);
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        setIsCamActive(true);
+      } catch (err) {
+        console.error("Camera access denied:", err);
+      }
+    }
+  };
+
   // --- TIMER LOGIC ---
   useEffect(() => {
     let interval = null;
     if (isTimerActive && timeLeft > 0) {
       interval = setInterval(() => {
-        setTimeLeft((prev) => prev - 1);
+        setTimeLeft((prev) => {
+          if (prev === 11) playSFX('warn');
+          return prev - 1;
+        });
       }, 1000);
     } else if (timeLeft === 0 && isTimerActive) {
       clearInterval(interval);
-      // Auto-advance or submit if time runs out
       if (currentIndex === 4) {
         submitInterview();
       } else {
@@ -74,58 +200,56 @@ const App = () => {
 
   // --- AI LOGIC ---
   const callAI = async (prompt, isJson = true) => {
-  try {
-    const response = await fetch(API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt }
-            ]
-          }
-        ]
-      })
-    });
+    try {
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: prompt }
+              ]
+            }
+          ]
+        })
+      });
 
-    const rawText = await response.text();
-    console.log("Gemini RAW:", rawText);
+      const rawText = await response.text();
 
-    if (!response.ok) {
-      throw new Error("API request failed");
+      if (!response.ok) {
+        throw new Error("API request failed");
+      }
+
+      const data = JSON.parse(rawText);
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (!text) {
+        throw new Error("Empty AI response");
+      }
+
+      if (!isJson) return text;
+
+      const cleaned = text
+        .replace(/```json/g, "")
+        .replace(/```/g, "")
+        .trim();
+
+      return JSON.parse(cleaned);
+
+    } catch (error) {
+      console.error("AI Error:", error);
+      return null;
     }
-
-    const data = JSON.parse(rawText);
-
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!text) {
-      throw new Error("Empty AI response");
-    }
-
-    if (!isJson) return text;
-
-    // Gemini sometimes wraps JSON in ```json ```
-    const cleaned = text
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
-
-    return JSON.parse(cleaned);
-
-  } catch (error) {
-    console.error("AI Error:", error);
-    return null;
-  }
-};
+  };
 
   const getDailyTask = async () => {
+    playSFX('click');
     setLoading(true);
     setCategory('Daily');
-    const result = await callAI(`Generate a unique daily logic puzzle for an interview prep. Return JSON: { title: "string", puzzle: "string", hint: "string", solution: "string" }`);
+    const result = await callAI(`Generate a unique daily logic puzzle for an interview prep for target role ${role}. Return JSON: { title: "string", puzzle: "string", hint: "string", solution: "string" }`);
     if (result) {
       setDailyTask(result);
       setView('tasks');
@@ -135,24 +259,37 @@ const App = () => {
 
   const handleSharkChat = async () => {
     if (!chatInput.trim()) return;
+    playSFX('click');
     const userMsg = chatInput;
     setChatInput("");
     setChatHistory(prev => [...prev, { role: 'user', text: userMsg }]);
     setIsChatLoading(true);
 
-    const prompt = `You are Shark 🦈, an AI interview coach. Your style: simple English, funny, uses ocean puns, but provides very meaningful and helpful interview advice.
+    const personaStyle = {
+      funny: "funny, uses ocean puns, enthusiastic",
+      ruthless: "direct, sharp, demanding high excellence, like a tough Wall Street recruiter",
+      supportive: "warm, gentle, encouraging, highly empathetic",
+      zen: "calm, structured, philosophical, focused on breath and mental clarity"
+    };
+
+    const prompt = `You are Shark 🦈, an AI interview coach. Your personality mode is: ${personaStyle[sharkPersona]}.
+    User is practicing for a ${role} role.
     The user says: "${userMsg}"
-    Keep your answer short and punchy. Avoid complex formatting.`;
+    Keep your answer short, practical, and punchy. Avoid complex markdown.`;
     
     const response = await callAI(prompt, false);
-    setChatHistory(prev => [...prev, { role: 'bot', text: response || "My gills are clogged! Try again." }]);
+    const botMsg = response || "My gills are clogged! Try again.";
+    setChatHistory(prev => [...prev, { role: 'bot', text: botMsg }]);
     setIsChatLoading(false);
   };
 
   const startSession = async (type) => {
+    playSFX('click');
     setLoading(true);
     setCategory(type);
-    const result = await callAI(`Generate 5 ${level} interview questions for ${type}. Each question object MUST include an 'options' key which is an ARRAY of 4 strings. Return JSON array: [{id, question, options: ["A", "B", "C", "D"], answer, explanation}]`);
+    const prompt = `Generate 5 ${level} level interview questions for a ${role} focusing on ${type}. Each question object MUST include an 'options' key which is an ARRAY of 4 strings. Return JSON array: [{id, question, options: ["A", "B", "C", "D"], answer, explanation}]`;
+    
+    const result = await callAI(prompt);
     if (result && Array.isArray(result)) {
       setQuestions(result);
       setView('interview');
@@ -167,12 +304,18 @@ const App = () => {
   };
 
   const submitInterview = async () => {
+    playSFX('success');
     setIsTimerActive(false);
     setLoading(true);
-    const result = await callAI(`Analyze these answers: ${JSON.stringify({ questions, userAnswers })}. Return JSON: { score: number, strengths: string[], weaknesses: string[], overallFeedback: string, mentorAdvice: string }`);
+    const result = await callAI(`Analyze these answers for a candidate applying for ${role}: ${JSON.stringify({ questions, userAnswers })}. Return JSON: { score: number, strengths: string[], weaknesses: string[], overallFeedback: string, mentorAdvice: string }`);
     if (result) {
       setFeedback(result);
-      setPoints(prev => prev + (result?.score || 0)); 
+      const addedPoints = result?.score || 0;
+      setPoints(prev => prev + addedPoints);
+
+      if (addedPoints >= 80 && !badges.includes('Sharpshooter')) {
+        setBadges(prev => [...prev, 'Sharpshooter']);
+      }
       setView('result');
     }
     setLoading(false);
@@ -185,7 +328,7 @@ const App = () => {
     </div>
   );
 
-  const Button = ({ children, onClick, variant = "primary", icon: Icon, loading, disabled }) => {
+  const Button = ({ children, onClick, variant = "primary", icon: Icon, loading, disabled, className = "" }) => {
     const variants = {
       primary: "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40",
       secondary: "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700",
@@ -193,9 +336,12 @@ const App = () => {
     };
     return (
       <button 
-        onClick={onClick}
+        onClick={(e) => {
+          playSFX('click');
+          if (onClick) onClick(e);
+        }}
         disabled={loading || disabled}
-        className={`${variants[variant]} flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95 disabled:opacity-40`}
+        className={`${variants[variant]} flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95 disabled:opacity-40 ${className}`}
       >
         {loading ? <Loader2 className="animate-spin w-5 h-5" /> : Icon && <Icon className="w-5 h-5" />}
         {children}
@@ -215,7 +361,7 @@ const App = () => {
             SWIM TO<br/>SUCCESS.
           </h1>
           <p className="text-xl text-slate-400 mb-10 max-w-xl mx-auto">
-            Interactive AI interview prep with Shark 🦈 mentor, level-based timers, and detailed progress tracking.
+            Interactive AI interview prep with Shark 🦈 mentor, voice answers, live camera simulator, and custom role drills.
           </p>
           <Button onClick={() => setView('dashboard')} icon={Play}>Begin Journey</Button>
         </div>
@@ -236,41 +382,79 @@ const App = () => {
                 <h2 className="text-3xl font-black text-white flex items-center gap-3">
                    <Map className="text-blue-500" /> Career Journey
                 </h2>
-                <p className="text-slate-500 text-sm">Your current status: <span className="text-blue-400 font-bold uppercase">{userRank}</span></p>
+                <p className="text-slate-500 text-sm">Your status: <span className="text-blue-400 font-bold uppercase">{userRank}</span></p>
               </div>
-              <div className="text-right">
-                <span className="text-2xl font-black text-blue-500">{points}</span>
-                <span className="text-slate-600 text-xs font-bold block uppercase tracking-widest">XP Points</span>
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2 bg-orange-500/10 border border-orange-500/20 px-3 py-1.5 rounded-2xl">
+                  <Flame className="w-5 h-5 text-orange-400" />
+                  <span className="font-bold text-orange-400 text-sm">{streak} Day Streak</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-2xl font-black text-blue-500">{points}</span>
+                  <span className="text-slate-600 text-xs font-bold block uppercase tracking-widest">XP Points</span>
+                </div>
               </div>
             </div>
             <div className="h-4 bg-slate-900 rounded-full border border-slate-800 overflow-hidden relative">
               <div className="h-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all duration-1000" style={{ width: `${Math.min(100, (points/1000)*100)}%` }} />
             </div>
             <div className="flex justify-between mt-2 text-[10px] font-black text-slate-600 uppercase tracking-tighter">
-              <span>Novice</span>
-              <span>Professional</span>
-              <span>Expert Mentor</span>
+              <span>Novice (0 XP)</span>
+              <span>Professional (300 XP)</span>
+              <span>Expert Mentor (800+ XP)</span>
             </div>
           </div>
 
-          <div className="flex flex-col md:flex-row justify-between items-center gap-6 mb-12">
-            <h3 className="text-xl font-bold uppercase tracking-widest text-slate-400">Select Simulation</h3>
-            <div className="flex bg-slate-900 p-1 rounded-2xl border border-slate-800">
-              {['Beginner', 'Professional', 'Expert'].map((l) => (
-                <button
-                  key={l}
-                  onClick={() => setLevel(l)}
-                  className={`px-6 py-2 rounded-xl text-sm font-bold transition-all ${level === l ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-slate-400 hover:text-slate-200'}`}
-                >
-                  {l}
-                </button>
-              ))}
+          {/* BADGES DISPLAY */}
+          <div className="mb-8 flex items-center gap-3 overflow-x-auto pb-2">
+            <span className="text-xs font-bold text-slate-500 uppercase">Badges:</span>
+            {badges.map((b, idx) => (
+              <span key={idx} className="bg-slate-800 border border-slate-700 text-slate-300 text-xs px-3 py-1 rounded-full flex items-center gap-1.5 font-semibold">
+                <Trophy className="w-3.5 h-3.5 text-yellow-500" /> {b}
+              </span>
+            ))}
+          </div>
+
+          {/* TARGET ROLE & LEVEL SELECTOR */}
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-12 bg-slate-900/40 p-6 rounded-3xl border border-slate-800">
+            <div>
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2">Target Position</label>
+              <select 
+                value={role} 
+                onChange={(e) => setRole(e.target.value)}
+                className="bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500"
+              >
+                <option>Frontend Developer</option>
+                <option>Backend Developer</option>
+
+                <option>Data Scientist</option>
+                <option>Product Manager</option>
+                <option>System Architect</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2">Simulation Difficulty</label>
+              <div className="flex bg-slate-900 p-1 rounded-2xl border border-slate-800">
+                {['Beginner', 'Professional', 'Expert'].map((l) => (
+                  <button
+                    key={l}
+                    onClick={() => {
+                      playSFX('click');
+                      setLevel(l);
+                    }}
+                    className={`px-6 py-2 rounded-xl text-sm font-bold transition-all ${level === l ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
             {[
-              { id: 'Aptitude', title: 'Logic Round', desc: 'Numbers, patterns, and quick logic.', icon: Brain, color: 'text-blue-400', bg: 'bg-blue-400/10' },
+              { id: 'Aptitude', title: 'Logic Round', desc: 'Numbers, patterns, and quick reasoning.', icon: Brain, color: 'text-blue-400', bg: 'bg-blue-400/10' },
               { id: 'HR', title: 'HR Round', desc: 'Soft skills & behavioral tests.', icon: UserCircle, color: 'text-purple-400', bg: 'bg-purple-400/10' },
               { id: 'Daily', title: 'Daily Tasks', desc: 'Keep your brain swimming!', icon: Clock, color: 'text-emerald-400', bg: 'bg-emerald-400/10' }
             ].map((card) => (
@@ -309,44 +493,120 @@ const App = () => {
             <p className="text-slate-300 mb-10 text-lg leading-relaxed">{dailyTask.puzzle}</p>
             <div className="flex gap-4">
               <Button onClick={() => setView('dashboard')} variant="secondary" icon={ArrowLeft}>Back</Button>
-              <Button onClick={() => alert(`Solution: ${dailyTask.solution}`)} variant="outline">Reveal Logic</Button>
+              <Button onClick={() => setShowSolutionModal(true)} variant="outline">Reveal Logic</Button>
             </div>
           </Card>
+
+          {/* Solution Modal */}
+          {showSolutionModal && (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+              <div className="bg-slate-900 border border-slate-700 p-8 rounded-3xl max-w-lg w-full animate-in zoom-in-95">
+                <h4 className="text-2xl font-bold text-white mb-4">Solution</h4>
+                <p className="text-slate-300 mb-6 leading-relaxed">{dailyTask.solution}</p>
+                <Button onClick={() => setShowSolutionModal(false)} className="w-full">Got it!</Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* --- INTERVIEW VIEW --- */}
       {view === 'interview' && currentQuestion && (
         <div className="min-h-screen flex items-center justify-center p-6 animate-in zoom-in-95">
-          <Card className="max-w-3xl w-full relative overflow-hidden">
-            <div className="flex justify-between items-center mb-10">
-              <span className="text-blue-400 font-mono text-xs font-bold uppercase tracking-widest">Question {currentIndex + 1} / 5</span>
-              <div className={`flex flex-col items-end ${timeLeft <= 10 ? 'text-red-500 animate-pulse' : 'text-blue-400'}`}>
-                <div className="text-4xl font-mono font-black tabular-nums">{Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}</div>
-                <span className="text-[10px] uppercase font-black">Time Left</span>
+          <Card className="max-w-4xl w-full relative overflow-hidden">
+            
+            {/* INTERVIEW TOOLBAR: SPEECH READOUT, CAM SIMULATOR, SCRATCHPAD */}
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-6 mb-8">
+              <div className="flex items-center gap-3">
+                <span className="text-blue-400 font-mono text-xs font-bold uppercase tracking-widest">Question {currentIndex + 1} / 5</span>
+                <button 
+                  onClick={() => speakText(currentQuestion.question)}
+                  className="text-slate-400 hover:text-blue-400 transition-colors p-1"
+                  title="Read Question Aloud"
+                >
+                  {isSpeaking ? <VolumeX className="w-5 h-5 text-blue-400 animate-pulse" /> : <Volume2 className="w-5 h-5" />}
+                </button>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={toggleCam}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${isCamActive ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
+                >
+                  {isCamActive ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
+                  {isCamActive ? 'Disable Cam' : 'Enable Pressure Cam'}
+                </button>
+
+                <button 
+                  onClick={() => setShowScratchpad(!showScratchpad)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${showScratchpad ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
+                >
+                  <Code className="w-4 h-4" /> Scratchpad
+                </button>
+
+                <div className={`flex flex-col items-end ${timeLeft <= 10 ? 'text-red-500 animate-pulse' : 'text-blue-400'}`}>
+                  <div className="text-3xl font-mono font-black tabular-nums">{Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}</div>
+                </div>
               </div>
             </div>
-            <h2 className="text-3xl font-bold mb-8 text-white">{currentQuestion.question}</h2>
+
+            {/* LIVE WEBCAM OVERLAY IF ACTIVE */}
+            {isCamActive && (
+              <div className="mb-6 rounded-2xl overflow-hidden border border-slate-700 h-44 bg-black relative">
+                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                <span className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-[10px] text-emerald-400 font-mono">REC • Live Prep</span>
+              </div>
+            )}
+
+            <h2 className="text-2xl md:text-3xl font-bold mb-8 text-white">{currentQuestion.question}</h2>
+
+            {/* SCRATCHPAD AREA */}
+            {showScratchpad && (
+              <div className="mb-6">
+                <textarea
+                  value={scratchpad}
+                  onChange={(e) => setScratchpad(e.target.value)}
+                  placeholder="Scratchpad for code snippets or logic thoughts..."
+                  className="w-full h-32 bg-slate-950 font-mono text-sm text-emerald-400 p-4 rounded-xl border border-slate-800 outline-none focus:border-blue-500"
+                />
+              </div>
+            )}
+
             {currentQuestion.options && Array.isArray(currentQuestion.options) ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
                 {currentQuestion.options.map((opt, i) => (
                   <button
                     key={i}
-                    onClick={() => setUserAnswers({...userAnswers, [currentIndex]: opt})}
-                    className={`text-left p-5 rounded-2xl border-2 transition-all font-bold ${userAnswers[currentIndex] === opt ? 'bg-blue-600 border-blue-400 shadow-xl translate-x-1' : 'bg-slate-800/40 border-slate-700'}`}
+                    onClick={() => {
+                      playSFX('click');
+                      setUserAnswers({...userAnswers, [currentIndex]: opt});
+                    }}
+                    className={`text-left p-5 rounded-2xl border-2 transition-all font-bold ${userAnswers[currentIndex] === opt ? 'bg-blue-600 border-blue-400 shadow-xl translate-x-1' : 'bg-slate-800/40 border-slate-700 hover:border-slate-500'}`}
                   >
                     <span className="mr-3 text-slate-400">{String.fromCharCode(65 + i)}.</span> {opt}
                   </button>
                 ))}
               </div>
             ) : (
-              <textarea
-                className="w-full h-48 bg-slate-800/50 border-2 border-slate-700 rounded-2xl p-6 mb-10 outline-none focus:border-blue-500 text-lg text-white"
-                placeholder="Type your response..."
-                value={userAnswers[currentIndex] || ''}
-                onChange={(e) => setUserAnswers({...userAnswers, [currentIndex]: e.target.value})}
-              />
+              <div className="relative mb-10">
+                <textarea
+                  className="w-full h-48 bg-slate-800/50 border-2 border-slate-700 rounded-2xl p-6 outline-none focus:border-blue-500 text-lg text-white pr-14"
+                  placeholder="Type or use speech-to-text..."
+                  value={userAnswers[currentIndex] || ''}
+                  onChange={(e) => setUserAnswers({...userAnswers, [currentIndex]: e.target.value})}
+                />
+                {speechSupported && (
+                  <button
+                    onClick={toggleListening}
+                    className={`absolute right-4 top-4 p-3 rounded-xl transition-all ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-700 text-slate-300 hover:text-white'}`}
+                    title="Dictate Answer"
+                  >
+                    {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                  </button>
+                )}
+              </div>
             )}
+
             <div className="flex justify-end">
               <Button onClick={() => currentIndex === 4 ? submitInterview() : (setCurrentIndex(prev => prev + 1), setTimeLeft(getLevelTime()))} loading={loading}>
                 {currentIndex === 4 ? 'Submit Simulation' : 'Next Question'}
@@ -394,28 +654,55 @@ const App = () => {
       {/* --- SHARK CHATBOT 🦈 --- */}
       <div className="fixed bottom-6 right-6 z-[100] flex flex-col items-end">
         {isChatOpen && (
-          <div className="w-80 md:w-96 h-[450px] bg-slate-900 border border-slate-700 rounded-3xl shadow-2xl flex flex-col mb-4 animate-in slide-in-from-bottom-10">
-            <div className="p-4 bg-gradient-to-r from-blue-700 to-blue-900 rounded-t-3xl flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">🦈</span>
-                <div>
-                  <h4 className="text-sm font-black text-white">Shark AI</h4>
-                  <span className="text-[10px] text-blue-200">Interview Predator</span>
+          <div className="w-80 md:w-96 h-[500px] bg-slate-900 border border-slate-700 rounded-3xl shadow-2xl flex flex-col mb-4 animate-in slide-in-from-bottom-10">
+            
+            {/* CHAT HEADER & PERSONALITY SELECTOR */}
+            <div className="p-4 bg-gradient-to-r from-blue-700 to-blue-900 rounded-t-3xl flex flex-col gap-2">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">🦈</span>
+                  <div>
+                    <h4 className="text-sm font-black text-white">Shark AI</h4>
+                    <span className="text-[10px] text-blue-200">Interview Predator</span>
+                  </div>
                 </div>
+                <button onClick={() => setIsChatOpen(false)}><XCircle className="w-5 h-5 text-white/50 hover:text-white" /></button>
               </div>
-              <button onClick={() => setIsChatOpen(false)}><XCircle className="w-5 h-5 text-white/50" /></button>
+
+              {/* Persona buttons */}
+              <div className="flex gap-1 bg-black/30 p-1 rounded-xl">
+                {['funny', 'ruthless', 'supportive', 'zen'].map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => setSharkPersona(p)}
+                    className={`flex-1 text-[10px] font-bold py-1 rounded-lg capitalize transition-all ${sharkPersona === p ? 'bg-blue-500 text-white' : 'text-slate-300 hover:text-white'}`}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
             </div>
+
             <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
               {chatHistory.map((msg, i) => (
-                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[80%] p-3 rounded-2xl text-xs leading-relaxed ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'}`}>
+                <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                  <div className={`max-w-[85%] p-3 rounded-2xl text-xs leading-relaxed ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'}`}>
                     {msg.text}
                   </div>
+                  {msg.role === 'bot' && (
+                    <button 
+                      onClick={() => speakText(msg.text)} 
+                      className="text-[10px] text-slate-500 hover:text-blue-400 mt-1 flex items-center gap-1"
+                    >
+                      <Volume2 className="w-3 h-3" /> Speak
+                    </button>
+                  )}
                 </div>
               ))}
               {isChatLoading && <div className="text-slate-500 text-[10px] animate-pulse">Shark is thinking... 🌊</div>}
               <div ref={chatEndRef} />
             </div>
+
             <div className="p-3 border-t border-slate-800 flex gap-2">
               <input 
                 className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2 text-xs focus:ring-1 ring-blue-500 outline-none text-white"
@@ -424,13 +711,16 @@ const App = () => {
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleSharkChat()}
               />
-              <button onClick={handleSharkChat} className="bg-blue-600 p-2 rounded-xl text-white"><Send className="w-4 h-4" /></button>
+              <button onClick={handleSharkChat} className="bg-blue-600 p-2 rounded-xl text-white hover:bg-blue-500"><Send className="w-4 h-4" /></button>
             </div>
           </div>
         )}
         <button 
-          onClick={() => setIsChatOpen(!isChatOpen)}
-          className="w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center shadow-2xl hover:scale-110 transition-transform active:scale-90"
+          onClick={() => {
+            playSFX('click');
+            setIsChatOpen(!isChatOpen);
+          }}
+          className="w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center shadow-2xl hover:scale-110 transition-transform active:scale-90 relative"
         >
           <span className="text-3xl">🦈</span>
           <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-[#020617]" />
