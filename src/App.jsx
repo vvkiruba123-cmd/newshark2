@@ -3,7 +3,8 @@ import {
   Trophy, Brain, UserCircle, Play, CheckCircle, X, Loader2, 
   Lightbulb, Clock, ArrowLeft, Star, AlertTriangle, Info, Sparkles,
   MessageCircle, Send, XCircle, Map, Zap, Mic, MicOff, Volume2,
-  Video, VideoOff, Code, Flame, Target, Compass, BookOpen, VolumeX
+  Video, VideoOff, Code, Flame, Target, Compass, BookOpen, VolumeX,
+  Languages, Building2, Edit3, Trash2
 } from 'lucide-react';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
@@ -44,11 +45,42 @@ const playSFX = (type) => {
   }
 };
 
+// --- EXTERNAL REUSABLE UI COMPONENTS ---
+// Defined outside App to prevent unmounting/remounting on state changes (fixes Scratchpad focus loss)
+const Card = ({ children, className = "" }) => (
+  <div className={`bg-slate-900/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-8 shadow-2xl ${className}`}>
+    {children}
+  </div>
+);
+
+const Button = ({ children, onClick, variant = "primary", icon: Icon, loading, disabled, className = "" }) => {
+  const variants = {
+    primary: "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40",
+    secondary: "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700",
+    outline: "border-2 border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
+  };
+  return (
+    <button 
+      onClick={(e) => {
+        playSFX('click');
+        if (onClick) onClick(e);
+      }}
+      disabled={loading || disabled}
+      className={`${variants[variant]} flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95 disabled:opacity-40 ${className}`}
+    >
+      {loading ? <Loader2 className="animate-spin w-5 h-5" /> : Icon && <Icon className="w-5 h-5" />}
+      {children}
+    </button>
+  );
+};
+
 const App = () => {
   // --- STATE ---
   const [view, setView] = useState('landing'); 
   const [level, setLevel] = useState('Beginner'); 
   const [role, setRole] = useState('Frontend Developer');
+  const [regionalDrive, setRegionalDrive] = useState('General MNC');
+  const [vernacularLang, setVernacularLang] = useState('English');
   const [category, setCategory] = useState(null); 
   const [questions, setQuestions] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -65,11 +97,16 @@ const App = () => {
 
   // Camera State
   const [isCamActive, setIsCamActive] = useState(false);
+  const [isMockCam, setIsMockCam] = useState(false);
   const videoRef = useRef(null);
 
-  // Scratchpad State
+  // Scratchpad & Whiteboard State
   const [scratchpad, setScratchpad] = useState('');
   const [showScratchpad, setShowScratchpad] = useState(false);
+  const [showWhiteboard, setShowWhiteboard] = useState(false);
+  const canvasRef = useRef(null);
+  const savedCanvasDataRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
 
   // Gamification & Streak State
   const [points, setPoints] = useState(150); 
@@ -107,7 +144,7 @@ const App = () => {
     if (!isListening) {
       recognition.continuous = false;
       recognition.interimResults = false;
-      recognition.lang = 'en-US';
+      recognition.lang = vernacularLang === 'Tamil' ? 'ta-IN' : vernacularLang === 'Hindi' ? 'hi-IN' : 'en-US';
 
       recognition.onstart = () => setIsListening(true);
       recognition.onresult = (event) => {
@@ -141,13 +178,14 @@ const App = () => {
     window.speechSynthesis.speak(utterance);
   };
 
-  // --- CAMERA SETUP ---
+  // --- CAMERA SETUP (SAFE WITH PERMISSION FALLBACK) ---
   const toggleCam = async () => {
     if (isCamActive) {
       if (videoRef.current && videoRef.current.srcObject) {
         videoRef.current.srcObject.getTracks().forEach(track => track.stop());
       }
       setIsCamActive(false);
+      setIsMockCam(false);
     } else {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
@@ -155,11 +193,72 @@ const App = () => {
           videoRef.current.srcObject = stream;
         }
         setIsCamActive(true);
+        setIsMockCam(false);
       } catch (err) {
-        console.error("Camera access denied:", err);
+        console.warn("Camera access restricted or blocked. Switching to simulated pressure mode.", err);
+        setIsCamActive(true);
+        setIsMockCam(true);
       }
     }
   };
+
+  // --- PERSISTENT WHITEBOARD DRAWING LOGIC ---
+  const startDrawing = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    
+    ctx.beginPath();
+    ctx.moveTo(clientX - rect.left, clientY - rect.top);
+    setIsDrawing(true);
+  };
+
+  const draw = (e) => {
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineTo(clientX - rect.left, clientY - rect.top);
+    ctx.stroke();
+  };
+
+  const stopDrawing = () => {
+    if (!isDrawing) return;
+    setIsDrawing(false);
+    const canvas = canvasRef.current;
+    if (canvas) {
+      savedCanvasDataRef.current = canvas.toDataURL();
+    }
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      savedCanvasDataRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    if (showWhiteboard && canvasRef.current && savedCanvasDataRef.current) {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+      img.src = savedCanvasDataRef.current;
+      img.onload = () => ctx.drawImage(img, 0, 0);
+    }
+  }, [showWhiteboard]);
 
   // --- TIMER LOGIC ---
   useEffect(() => {
@@ -249,7 +348,7 @@ const App = () => {
     playSFX('click');
     setLoading(true);
     setCategory('Daily');
-    const result = await callAI(`Generate a unique daily logic puzzle for an interview prep for target role ${role}. Return JSON: { title: "string", puzzle: "string", hint: "string", solution: "string" }`);
+    const result = await callAI(`Generate a unique daily logic puzzle for an interview prep for target role ${role} in ${regionalDrive} recruitment drives. Return JSON: { title: "string", puzzle: "string", hint: "string", solution: "string" }`);
     if (result) {
       setDailyTask(result);
       setView('tasks');
@@ -273,7 +372,8 @@ const App = () => {
     };
 
     const prompt = `You are Shark 🦈, an AI interview coach. Your personality mode is: ${personaStyle[sharkPersona]}.
-    User is practicing for a ${role} role.
+    User is practicing for a ${role} role in ${regionalDrive} placement drives.
+    Preferred Language Explanation: ${vernacularLang}.
     The user says: "${userMsg}"
     Keep your answer short, practical, and punchy. Avoid complex markdown.`;
     
@@ -287,7 +387,11 @@ const App = () => {
     playSFX('click');
     setLoading(true);
     setCategory(type);
-    const prompt = `Generate 5 ${level} level interview questions for a ${role} focusing on ${type}. Each question object MUST include an 'options' key which is an ARRAY of 4 strings. Return JSON array: [{id, question, options: ["A", "B", "C", "D"], answer, explanation}]`;
+    const prompt = `Generate 5 ${level} level interview questions for a ${role} position focusing on ${type}. 
+    Company/Drive Context: ${regionalDrive}.
+    Explanation Language Focus: ${vernacularLang}.
+    Each question object MUST include an 'options' key which is an ARRAY of 4 strings. 
+    Return JSON array: [{id, question, options: ["A", "B", "C", "D"], answer, explanation}]`;
     
     const result = await callAI(prompt);
     if (result && Array.isArray(result)) {
@@ -307,7 +411,7 @@ const App = () => {
     playSFX('success');
     setIsTimerActive(false);
     setLoading(true);
-    const result = await callAI(`Analyze these answers for a candidate applying for ${role}: ${JSON.stringify({ questions, userAnswers })}. Return JSON: { score: number, strengths: string[], weaknesses: string[], overallFeedback: string, mentorAdvice: string }`);
+    const result = await callAI(`Analyze these answers for a candidate applying for ${role} in ${regionalDrive} drives: ${JSON.stringify({ questions, userAnswers })}. Provide feedback tailored to ${vernacularLang} speaking students. Return JSON: { score: number, strengths: string[], weaknesses: string[], overallFeedback: string, mentorAdvice: string }`);
     if (result) {
       setFeedback(result);
       const addedPoints = result?.score || 0;
@@ -319,34 +423,6 @@ const App = () => {
       setView('result');
     }
     setLoading(false);
-  };
-
-  // --- UI COMPONENTS ---
-  const Card = ({ children, className = "" }) => (
-    <div className={`bg-slate-900/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-8 shadow-2xl ${className}`}>
-      {children}
-    </div>
-  );
-
-  const Button = ({ children, onClick, variant = "primary", icon: Icon, loading, disabled, className = "" }) => {
-    const variants = {
-      primary: "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40",
-      secondary: "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700",
-      outline: "border-2 border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
-    };
-    return (
-      <button 
-        onClick={(e) => {
-          playSFX('click');
-          if (onClick) onClick(e);
-        }}
-        disabled={loading || disabled}
-        className={`${variants[variant]} flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95 disabled:opacity-40 ${className}`}
-      >
-        {loading ? <Loader2 className="animate-spin w-5 h-5" /> : Icon && <Icon className="w-5 h-5" />}
-        {children}
-      </button>
-    );
   };
 
   if (view === 'landing') {
@@ -361,7 +437,7 @@ const App = () => {
             SWIM TO<br/>SUCCESS.
           </h1>
           <p className="text-xl text-slate-400 mb-10 max-w-xl mx-auto">
-            Interactive AI interview prep with Shark 🦈 mentor, voice answers, live camera simulator, and custom role drills.
+            Interactive AI interview prep with Shark 🦈 mentor, voice answers, live camera simulator, regional drive modules, and custom role drills.
           </p>
           <Button onClick={() => setView('dashboard')} icon={Play}>Begin Journey</Button>
         </div>
@@ -415,18 +491,19 @@ const App = () => {
             ))}
           </div>
 
-          {/* TARGET ROLE & LEVEL SELECTOR */}
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-12 bg-slate-900/40 p-6 rounded-3xl border border-slate-800">
+          {/* REGIONAL PLACEMENT & LANGUAGE CONTROLS */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8 bg-slate-900/40 p-6 rounded-3xl border border-slate-800">
             <div>
-              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2">Target Position</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2 flex items-center gap-1">
+                <Target className="w-3.5 h-3.5 text-blue-400" /> Target Position
+              </label>
               <select 
                 value={role} 
                 onChange={(e) => setRole(e.target.value)}
-                className="bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500"
+                className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500"
               >
                 <option>Frontend Developer</option>
                 <option>Backend Developer</option>
-
                 <option>Data Scientist</option>
                 <option>Product Manager</option>
                 <option>System Architect</option>
@@ -434,8 +511,41 @@ const App = () => {
             </div>
 
             <div>
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2 flex items-center gap-1">
+                <Building2 className="w-3.5 h-3.5 text-purple-400" /> Regional Placement Drive
+              </label>
+              <select 
+                value={regionalDrive} 
+                onChange={(e) => setRegionalDrive(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500"
+              >
+                <option>General MNC</option>
+                <option>TCS Digital / NQT</option>
+                <option>Infosys / Wipro Drive</option>
+                <option>Zoho Software Development</option>
+                <option>Tier-2 / Tier-3 College Campus Drive</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2 flex items-center gap-1">
+                <Languages className="w-3.5 h-3.5 text-emerald-400" /> Explanation Language
+              </label>
+              <select 
+                value={vernacularLang} 
+                onChange={(e) => setVernacularLang(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500"
+              >
+                <option>English</option>
+                <option>Tamil</option>
+                <option>Hindi</option>
+                <option>Telugu</option>
+              </select>
+            </div>
+
+            <div>
               <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2">Simulation Difficulty</label>
-              <div className="flex bg-slate-900 p-1 rounded-2xl border border-slate-800">
+              <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-800">
                 {['Beginner', 'Professional', 'Expert'].map((l) => (
                   <button
                     key={l}
@@ -443,7 +553,7 @@ const App = () => {
                       playSFX('click');
                       setLevel(l);
                     }}
-                    className={`px-6 py-2 rounded-xl text-sm font-bold transition-all ${level === l ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-slate-400 hover:text-slate-200'}`}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${level === l ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-slate-400 hover:text-slate-200'}`}
                   >
                     {l}
                   </button>
@@ -515,7 +625,7 @@ const App = () => {
         <div className="min-h-screen flex items-center justify-center p-6 animate-in zoom-in-95">
           <Card className="max-w-4xl w-full relative overflow-hidden">
             
-            {/* INTERVIEW TOOLBAR: SPEECH READOUT, CAM SIMULATOR, SCRATCHPAD */}
+            {/* INTERVIEW TOOLBAR: SPEECH READOUT, CAM SIMULATOR, SCRATCHPAD, WHITEBOARD */}
             <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-6 mb-8">
               <div className="flex items-center gap-3">
                 <span className="text-blue-400 font-mono text-xs font-bold uppercase tracking-widest">Question {currentIndex + 1} / 5</span>
@@ -528,7 +638,7 @@ const App = () => {
                 </button>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <button 
                   onClick={toggleCam}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${isCamActive ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
@@ -538,10 +648,23 @@ const App = () => {
                 </button>
 
                 <button 
-                  onClick={() => setShowScratchpad(!showScratchpad)}
+                  onClick={() => {
+                    setShowScratchpad(!showScratchpad);
+                    if (showWhiteboard) setShowWhiteboard(false);
+                  }}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${showScratchpad ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
                 >
                   <Code className="w-4 h-4" /> Scratchpad
+                </button>
+
+                <button 
+                  onClick={() => {
+                    setShowWhiteboard(!showWhiteboard);
+                    if (showScratchpad) setShowScratchpad(false);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${showWhiteboard ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
+                >
+                  <Edit3 className="w-4 h-4" /> Whiteboard
                 </button>
 
                 <div className={`flex flex-col items-end ${timeLeft <= 10 ? 'text-red-500 animate-pulse' : 'text-blue-400'}`}>
@@ -550,24 +673,58 @@ const App = () => {
               </div>
             </div>
 
-            {/* LIVE WEBCAM OVERLAY IF ACTIVE */}
+            {/* LIVE WEBCAM OVERLAY OR SIMULATED FALLBACK */}
             {isCamActive && (
-              <div className="mb-6 rounded-2xl overflow-hidden border border-slate-700 h-44 bg-black relative">
-                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-                <span className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-[10px] text-emerald-400 font-mono">REC • Live Prep</span>
+              <div className="mb-6 rounded-2xl overflow-hidden border border-slate-700 h-44 bg-black relative flex items-center justify-center">
+                {isMockCam ? (
+                  <div className="text-center p-4">
+                    <Video className="w-8 h-8 text-blue-500 mx-auto mb-2 animate-pulse" />
+                    <span className="text-xs font-mono text-slate-400">Simulated Pressure Cam Active</span>
+                  </div>
+                ) : (
+                  <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                )}
+                <span className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-[10px] text-emerald-400 font-mono flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" /> REC • Live Prep
+                </span>
               </div>
             )}
 
             <h2 className="text-2xl md:text-3xl font-bold mb-8 text-white">{currentQuestion.question}</h2>
 
-            {/* SCRATCHPAD AREA */}
+            {/* SCRATCHPAD AREA (TEXTAREA FIX INCLUDED) */}
             {showScratchpad && (
-              <div className="mb-6">
+              <div className="mb-6 animate-in fade-in">
                 <textarea
                   value={scratchpad}
                   onChange={(e) => setScratchpad(e.target.value)}
                   placeholder="Scratchpad for code snippets or logic thoughts..."
                   className="w-full h-32 bg-slate-950 font-mono text-sm text-emerald-400 p-4 rounded-xl border border-slate-800 outline-none focus:border-blue-500"
+                />
+              </div>
+            )}
+
+            {/* CANVAS WHITEBOARD AREA (CANVAS WIPE FIX INCLUDED) */}
+            {showWhiteboard && (
+              <div className="mb-6 animate-in fade-in relative">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-xs text-slate-400 font-mono">Drawing Board (Touch & Mouse Supported)</span>
+                  <button onClick={clearCanvas} className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1">
+                    <Trash2 className="w-3.5 h-3.5" /> Clear Canvas
+                  </button>
+                </div>
+                <canvas
+                  ref={canvasRef}
+                  width={700}
+                  height={200}
+                  onMouseDown={startDrawing}
+                  onMouseMove={draw}
+                  onMouseUp={stopDrawing}
+                  onMouseLeave={stopDrawing}
+                  onTouchStart={startDrawing}
+                  onTouchMove={draw}
+                  onTouchEnd={stopDrawing}
+                  className="w-full bg-slate-950 rounded-xl border border-slate-800 touch-none cursor-crosshair"
                 />
               </div>
             )}
@@ -626,11 +783,11 @@ const App = () => {
           <div className="grid lg:grid-cols-3 gap-8 mb-12">
             <div className="lg:col-span-1 space-y-6">
                <div className="bg-emerald-500/10 p-6 rounded-3xl border border-emerald-500/20">
-                 <h4 className="font-black text-emerald-400 text-xs mb-3">STRENGTHS</h4>
+                 <h4 className="font-black text-emerald-400 text-xs mb-3 uppercase">STRENGTHS</h4>
                  <ul className="text-xs space-y-2">{feedback.strengths?.map((s,i) => <li key={i}>• {s}</li>)}</ul>
                </div>
                <div className="bg-red-500/10 p-6 rounded-3xl border border-red-500/20">
-                 <h4 className="font-black text-red-400 text-xs mb-3">WEAKNESSES</h4>
+                 <h4 className="font-black text-red-400 text-xs mb-3 uppercase">WEAKNESSES</h4>
                  <ul className="text-xs space-y-2">{feedback.weaknesses?.map((w,i) => <li key={i}>• {w}</li>)}</ul>
                </div>
             </div>
