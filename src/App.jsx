@@ -6,6 +6,7 @@ import {
   Video, VideoOff, Code, Flame, Target, Compass, BookOpen, VolumeX,
   Languages, Building2, Edit3, Trash2
 } from 'lucide-react';
+import { supabase } from './services/supabase';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
@@ -94,7 +95,29 @@ const App = () => {
   const [isListening, setIsListening] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  // --- SUPABASE DATA FETCH ---
+  useEffect(() => {
+    async function fetchProfile() {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('user_id', 'user_akash_01')
+        .single();
 
+      if (error) {
+        console.error("Supabase Error:", error.message);
+      } else if (data) {
+        console.log("Loaded Supabase Data:", data);
+        
+        // Update React state with live data from Supabase
+        setPoints(data.points);
+        setStreak(data.streak);
+        if (data.badges) setBadges(data.badges);
+      }
+    }
+
+    fetchProfile();
+  }, []);
   // Camera State
   const [isCamActive, setIsCamActive] = useState(false);
   const [isMockCam, setIsMockCam] = useState(false);
