@@ -10,6 +10,7 @@ import {
 // Import Supabase Client
 import { supabase } from './services/supabase';
 import PressureCam from './components/PressureCam';
+import StudyMaterial from './components/StudyMaterial';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
@@ -182,6 +183,49 @@ const App = () => {
 
     fetchProfile();
   }, [user]);
+
+  // --- START SIMULATION FUNCTION ---
+  const startSimulation = (role) => {
+    playSFX('click');
+    setRole(role); // or setSelectedRole(role) depending on your variable name
+
+    // Request Fullscreen on round start
+    if (document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+
+    setCurrentIndex(0);
+    setUserAnswers({});
+    setTimeLeft(110);
+    setView('simulation'); // or 'interview' depending on your view state
+  };
+
+  // --- ANTI-CHEAT TAB SWITCH DETECTOR ---
+  useEffect(() => {
+    if (view !== 'simulation' && view !== 'interview') return; // Only active during test
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Deduct 50 XP penalty
+        setPoints((prev) => Math.max(0, prev - 50));
+        playSFX('incorrect');
+        alert('⚠️ Tab switch detected! You lost 50 XP for leaving the interview window.');
+      }
+    };
+
+    const handleBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [view]);
 
   // Auth Handlers
   const handleAuth = async (e) => {
@@ -718,9 +762,25 @@ const App = () => {
               </Card>
             ))}
           </div>
+          {/* STUDY VAULT BUTTON */}
+<button 
+  onClick={() => setView('study')}
+  className="p-4 rounded-2xl bg-slate-900 border border-slate-800 hover:border-blue-500/50 transition-all flex items-center gap-3 text-left group col-span-full md:col-span-2"
+>
+  <div className="p-3 bg-blue-500/10 text-blue-400 rounded-xl group-hover:bg-blue-500 group-hover:text-white transition-all">
+    <BookOpen className="w-6 h-6" />
+  </div>
+  <div>
+    <h3 className="font-bold text-white">Study Vault</h3>
+    <p className="text-xs text-slate-400">Quantitative aptitude formulas & tricks</p>
+  </div>
+</button>
         </div>
       )}
-
+{/* --- STUDY MATERIAL VIEW --- */}
+{view === 'study' && (
+  <StudyMaterial onBack={() => setView('dashboard')} />
+)}
       {/* --- RAPID WARMUP FLASHCARDS VIEW --- */}
       {view === 'flashcards' && currentFlashcard && (
         <div className="min-h-screen flex items-center justify-center p-6">
