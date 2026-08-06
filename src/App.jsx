@@ -4,9 +4,12 @@ import {
   Lightbulb, Clock, ArrowLeft, Star, AlertTriangle, Info, Sparkles,
   MessageCircle, Send, XCircle, Map, Zap, Mic, MicOff, Volume2,
   Video, VideoOff, Code, Flame, Target, Compass, BookOpen, VolumeX,
-  Languages, Building2, Edit3, Trash2
+  Layers, RotateCw, Check, Repeat, Languages, Building2, LogOut, Lock, Mail
 } from 'lucide-react';
+
+// Import Supabase Client
 import { supabase } from './services/supabase';
+import PressureCam from './components/PressureCam';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
@@ -42,19 +45,18 @@ const playSFX = (type) => {
       osc.stop(ctx.currentTime + 0.15);
     }
   } catch (e) {
-    // Ignore audio failures if context is restricted by browser
+    // Ignore audio failures
   }
 };
 
-// --- EXTERNAL REUSABLE UI COMPONENTS ---
-// Defined outside App to prevent unmounting/remounting on state changes (fixes Scratchpad focus loss)
+// --- STABLE UI COMPONENTS (DECLARED OUTSIDE APP TO PREVENT INPUT FOCUS LOSS) ---
 const Card = ({ children, className = "" }) => (
   <div className={`bg-slate-900/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-8 shadow-2xl ${className}`}>
     {children}
   </div>
 );
 
-const Button = ({ children, onClick, variant = "primary", icon: Icon, loading, disabled, className = "" }) => {
+const Button = ({ children, onClick, variant = "primary", icon: Icon, loading, disabled, className = "", type = "button" }) => {
   const variants = {
     primary: "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40",
     secondary: "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700",
@@ -62,6 +64,7 @@ const Button = ({ children, onClick, variant = "primary", icon: Icon, loading, d
   };
   return (
     <button 
+      type={type}
       onClick={(e) => {
         playSFX('click');
         if (onClick) onClick(e);
@@ -76,11 +79,19 @@ const Button = ({ children, onClick, variant = "primary", icon: Icon, loading, d
 };
 
 const App = () => {
-  // --- STATE ---
-  const [view, setView] = useState('landing'); 
+  // --- AUTH STATE ---
+  const [user, setUser] = useState(null);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authMode, setAuthMode] = useState('login'); // 'login' or 'signup'
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // --- APP STATE ---
+  const [view, setView] = useState('login'); 
   const [level, setLevel] = useState('Beginner'); 
   const [role, setRole] = useState('Frontend Developer');
-  const [regionalDrive, setRegionalDrive] = useState('General MNC');
+  const [targetCompany, setTargetCompany] = useState('General MNC');
   const [vernacularLang, setVernacularLang] = useState('English');
   const [category, setCategory] = useState(null); 
   const [questions, setQuestions] = useState([]);
@@ -95,46 +106,21 @@ const App = () => {
   const [isListening, setIsListening] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  // --- SUPABASE DATA FETCH ---
-  useEffect(() => {
-    async function fetchProfile() {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('user_id', 'user_akash_01')
-        .single();
 
-      if (error) {
-        console.error("Supabase Error:", error.message);
-      } else if (data) {
-        console.log("Loaded Supabase Data:", data);
-        
-        // Update React state with live data from Supabase
-        setPoints(data.points);
-        setStreak(data.streak);
-        if (data.badges) setBadges(data.badges);
-      }
-    }
-
-    fetchProfile();
-  }, []);
-  // Camera State
-  const [isCamActive, setIsCamActive] = useState(false);
-  const [isMockCam, setIsMockCam] = useState(false);
-  const videoRef = useRef(null);
-
-  // Scratchpad & Whiteboard State
+  // Scratchpad State
   const [scratchpad, setScratchpad] = useState('');
   const [showScratchpad, setShowScratchpad] = useState(false);
-  const [showWhiteboard, setShowWhiteboard] = useState(false);
-  const canvasRef = useRef(null);
-  const savedCanvasDataRef = useRef(null);
-  const [isDrawing, setIsDrawing] = useState(false);
 
   // Gamification & Streak State
   const [points, setPoints] = useState(150); 
   const [streak, setStreak] = useState(3);
   const [badges, setBadges] = useState(['Early Bird', 'First Swim']);
+
+  // Rapid Warmup Flashcard State
+  const [flashcards, setFlashcards] = useState([]);
+  const [flashcardIndex, setFlashcardIndex] = useState(0);
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [masteredCards, setMasteredCards] = useState(0);
   
   const userRank = points < 300 ? 'Novice' : points < 800 ? 'Pro' : 'Master Shark';
 
@@ -152,6 +138,106 @@ const App = () => {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const chatEndRef = useRef(null);
 
+  // --- SUPABASE AUTH LISTENER & DATA FETCH ---
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setUser(session.user);
+        setView('landing');
+      } else {
+        setView('login');
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setUser(session.user);
+      } else {
+        setUser(null);
+        setView('login');
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    async function fetchProfile() {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('user_id', user.id)
+        .single();
+
+      if (error) {
+        console.error("Supabase Error:", error.message);
+      } else if (data) {
+        if (data.points !== undefined) setPoints(data.points);
+        if (data.streak !== undefined) setStreak(data.streak);
+        if (data.badges) setBadges(data.badges);
+      }
+    }
+
+    fetchProfile();
+  }, [user]);
+
+  // Auth Handlers
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthLoading(true);
+
+    if (!authEmail || !authPassword) {
+      setAuthError('Please enter both email and password.');
+      setAuthLoading(false);
+      return;
+    }
+
+    if (authMode === 'login') {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      });
+
+      if (error) {
+        if (error.message.includes('Email not confirmed')) {
+          setAuthError('Email not confirmed. Please check your inbox or disable email confirmation in Supabase Dashboard.');
+        } else {
+          setAuthError(error.message);
+        }
+        playSFX('warn');
+      } else if (data.user) {
+        playSFX('success');
+        setUser(data.user);
+        setView('landing');
+      }
+    } else {
+      const { data, error } = await supabase.auth.signUp({
+        email: authEmail,
+        password: authPassword,
+      });
+
+      if (error) {
+        setAuthError(error.message);
+        playSFX('warn');
+      } else if (data.user) {
+        playSFX('success');
+        setUser(data.user);
+        setView('landing');
+      }
+    }
+    setAuthLoading(false);
+  };
+
+  const handleLogout = async () => {
+    playSFX('click');
+    await supabase.auth.signOut();
+    setUser(null);
+    setView('login');
+  };
+
   // --- SPEECH RECOGNITION SETUP ---
   useEffect(() => {
     if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
@@ -167,7 +253,7 @@ const App = () => {
     if (!isListening) {
       recognition.continuous = false;
       recognition.interimResults = false;
-      recognition.lang = vernacularLang === 'Tamil' ? 'ta-IN' : vernacularLang === 'Hindi' ? 'hi-IN' : 'en-US';
+      recognition.lang = vernacularLang === 'Tamil' ? 'ta-IN' : vernacularLang === 'Hindi' ? 'hi-IN' : vernacularLang === 'Telugu' ? 'te-IN' : 'en-US';
 
       recognition.onstart = () => setIsListening(true);
       recognition.onresult = (event) => {
@@ -200,88 +286,6 @@ const App = () => {
     setIsSpeaking(true);
     window.speechSynthesis.speak(utterance);
   };
-
-  // --- CAMERA SETUP (SAFE WITH PERMISSION FALLBACK) ---
-  const toggleCam = async () => {
-    if (isCamActive) {
-      if (videoRef.current && videoRef.current.srcObject) {
-        videoRef.current.srcObject.getTracks().forEach(track => track.stop());
-      }
-      setIsCamActive(false);
-      setIsMockCam(false);
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-        setIsCamActive(true);
-        setIsMockCam(false);
-      } catch (err) {
-        console.warn("Camera access restricted or blocked. Switching to simulated pressure mode.", err);
-        setIsCamActive(true);
-        setIsMockCam(true);
-      }
-    }
-  };
-
-  // --- PERSISTENT WHITEBOARD DRAWING LOGIC ---
-  const startDrawing = (e) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const rect = canvas.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
-    ctx.beginPath();
-    ctx.moveTo(clientX - rect.left, clientY - rect.top);
-    setIsDrawing(true);
-  };
-
-  const draw = (e) => {
-    if (!isDrawing) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const rect = canvas.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-
-    ctx.strokeStyle = '#38bdf8';
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    ctx.lineTo(clientX - rect.left, clientY - rect.top);
-    ctx.stroke();
-  };
-
-  const stopDrawing = () => {
-    if (!isDrawing) return;
-    setIsDrawing(false);
-    const canvas = canvasRef.current;
-    if (canvas) {
-      savedCanvasDataRef.current = canvas.toDataURL();
-    }
-  };
-
-  const clearCanvas = () => {
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      savedCanvasDataRef.current = null;
-    }
-  };
-
-  useEffect(() => {
-    if (showWhiteboard && canvasRef.current && savedCanvasDataRef.current) {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      const img = new Image();
-      img.src = savedCanvasDataRef.current;
-      img.onload = () => ctx.drawImage(img, 0, 0);
-    }
-  }, [showWhiteboard]);
 
   // --- TIMER LOGIC ---
   useEffect(() => {
@@ -329,38 +333,21 @@ const App = () => {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: prompt }
-              ]
-            }
-          ]
+          contents: [{ parts: [{ text: prompt }] }]
         })
       });
 
       const rawText = await response.text();
-
-      if (!response.ok) {
-        throw new Error("API request failed");
-      }
+      if (!response.ok) throw new Error("API request failed");
 
       const data = JSON.parse(rawText);
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (!text) {
-        throw new Error("Empty AI response");
-      }
+      if (!text) throw new Error("Empty AI response");
 
       if (!isJson) return text;
 
-      const cleaned = text
-        .replace(/```json/g, "")
-        .replace(/```/g, "")
-        .trim();
-
+      const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
       return JSON.parse(cleaned);
-
     } catch (error) {
       console.error("AI Error:", error);
       return null;
@@ -371,12 +358,43 @@ const App = () => {
     playSFX('click');
     setLoading(true);
     setCategory('Daily');
-    const result = await callAI(`Generate a unique daily logic puzzle for an interview prep for target role ${role} in ${regionalDrive} recruitment drives. Return JSON: { title: "string", puzzle: "string", hint: "string", solution: "string" }`);
+    const result = await callAI(`Generate a unique daily logic puzzle for an interview prep targeting ${targetCompany} drive for target role ${role}. Provide explanations in ${vernacularLang}. Return JSON: { title: "string", puzzle: "string", hint: "string", solution: "string" }`);
     if (result) {
       setDailyTask(result);
       setView('tasks');
     }
     setLoading(false);
+  };
+
+  const startFlashcards = async () => {
+    playSFX('click');
+    setLoading(true);
+    setCategory('Flashcards');
+    const prompt = `Generate 5 high-yield rapid warmup flashcards for a ${role} interview targeting ${targetCompany} drive at ${level} difficulty level. Language for explanation should be ${vernacularLang}. Each item should have a 'question' (short key concept question), an 'answer' (concise clear explanation), and 'keyPoints' (array of 2 short bullet points). Return JSON array: [{ id: number, question: string, answer: string, keyPoints: string[] }]`;
+    
+    const result = await callAI(prompt);
+    if (result && Array.isArray(result)) {
+      setFlashcards(result);
+      setFlashcardIndex(0);
+      setIsFlipped(false);
+      setMasteredCards(0);
+      setView('flashcards');
+    }
+    setLoading(false);
+  };
+
+  const nextFlashcard = (isMastered = false) => {
+    playSFX(isMastered ? 'success' : 'click');
+    if (isMastered) {
+      setMasteredCards(prev => prev + 1);
+      setPoints(prev => prev + 10);
+    }
+    setIsFlipped(false);
+    if (flashcardIndex < flashcards.length - 1) {
+      setFlashcardIndex(prev => prev + 1);
+    } else {
+      setView('dashboard');
+    }
   };
 
   const handleSharkChat = async () => {
@@ -389,16 +407,15 @@ const App = () => {
 
     const personaStyle = {
       funny: "funny, uses ocean puns, enthusiastic",
-      ruthless: "direct, sharp, demanding high excellence, like a tough Wall Street recruiter",
-      supportive: "warm, gentle, encouraging, highly empathetic",
-      zen: "calm, structured, philosophical, focused on breath and mental clarity"
+      ruthless: "direct, sharp, demanding high excellence",
+      supportive: "warm, gentle, encouraging",
+      zen: "calm, structured, philosophical"
     };
 
     const prompt = `You are Shark 🦈, an AI interview coach. Your personality mode is: ${personaStyle[sharkPersona]}.
-    User is practicing for a ${role} role in ${regionalDrive} placement drives.
-    Preferred Language Explanation: ${vernacularLang}.
+    User is practicing for a ${role} role targeting ${targetCompany} recruitment drive. Explain in ${vernacularLang}.
     The user says: "${userMsg}"
-    Keep your answer short, practical, and punchy. Avoid complex markdown.`;
+    Keep your answer short, practical, and punchy.`;
     
     const response = await callAI(prompt, false);
     const botMsg = response || "My gills are clogged! Try again.";
@@ -410,11 +427,7 @@ const App = () => {
     playSFX('click');
     setLoading(true);
     setCategory(type);
-    const prompt = `Generate 5 ${level} level interview questions for a ${role} position focusing on ${type}. 
-    Company/Drive Context: ${regionalDrive}.
-    Explanation Language Focus: ${vernacularLang}.
-    Each question object MUST include an 'options' key which is an ARRAY of 4 strings. 
-    Return JSON array: [{id, question, options: ["A", "B", "C", "D"], answer, explanation}]`;
+    const prompt = `Generate 5 ${level} level interview questions for a ${role} focusing on ${type} pattern specific to ${targetCompany} hiring drive pattern. Ensure explanations are in ${vernacularLang}. Each question object MUST include an 'options' key which is an ARRAY of 4 strings. Return JSON array: [{id, question, options: ["A", "B", "C", "D"], answer, explanation}]`;
     
     const result = await callAI(prompt);
     if (result && Array.isArray(result)) {
@@ -424,8 +437,6 @@ const App = () => {
       setUserAnswers({});
       setTimeLeft(getLevelTime());
       setIsTimerActive(true);
-    } else {
-      console.error("Invalid AI response format");
     }
     setLoading(false);
   };
@@ -434,7 +445,7 @@ const App = () => {
     playSFX('success');
     setIsTimerActive(false);
     setLoading(true);
-    const result = await callAI(`Analyze these answers for a candidate applying for ${role} in ${regionalDrive} drives: ${JSON.stringify({ questions, userAnswers })}. Provide feedback tailored to ${vernacularLang} speaking students. Return JSON: { score: number, strengths: string[], weaknesses: string[], overallFeedback: string, mentorAdvice: string }`);
+    const result = await callAI(`Analyze these answers for a candidate applying for ${role} at ${targetCompany}. Give clear mentor suggestions in ${vernacularLang}: ${JSON.stringify({ questions, userAnswers })}. Return JSON: { score: number, strengths: string[], weaknesses: string[], overallFeedback: string, mentorAdvice: string }`);
     if (result) {
       setFeedback(result);
       const addedPoints = result?.score || 0;
@@ -448,11 +459,91 @@ const App = () => {
     setLoading(false);
   };
 
+  /* --- LOGIN & SIGNUP VIEW --- */
+  if (view === 'login') {
+    return (
+      <div className="min-h-screen bg-[#020617] text-slate-200 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-600/10 blur-[120px] rounded-full" />
+        <Card className="max-w-md w-full z-10">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 mb-4 font-bold text-xs">
+              <Zap className="w-4 h-4" /> INTERVIEW PORTAL
+            </div>
+            <h2 className="text-3xl font-black text-white">
+              {authMode === 'login' ? 'Welcome Back' : 'Create Account'}
+            </h2>
+            <p className="text-slate-400 text-sm mt-1">
+              {authMode === 'login' ? 'Sign in to access your interview practice portal' : 'Start your journey to crack dream interviews'}
+            </p>
+          </div>
+
+          {authError && (
+            <div className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-semibold flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{authError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleAuth} className="space-y-4">
+            <div>
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2">Email Address</label>
+              <div className="relative">
+                <Mail className="w-5 h-5 text-slate-500 absolute left-4 top-3.5" />
+                <input
+                  type="email"
+                  required
+                  placeholder="name@company.com"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  className="w-full bg-slate-800/80 border border-slate-700 text-white rounded-xl pl-12 pr-4 py-3 text-sm font-semibold outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2">Password</label>
+              <div className="relative">
+                <Lock className="w-5 h-5 text-slate-500 absolute left-4 top-3.5" />
+                <input
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  className="w-full bg-slate-800/80 border border-slate-700 text-white rounded-xl pl-12 pr-4 py-3 text-sm font-semibold outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            <Button type="submit" loading={authLoading} className="w-full mt-6">
+              {authMode === 'login' ? 'Sign In' : 'Sign Up'}
+            </Button>
+          </form>
+
+          <div className="mt-6 text-center border-t border-slate-800 pt-6">
+            <button
+              type="button"
+              onClick={() => {
+                playSFX('click');
+                setAuthError('');
+                setAuthMode(authMode === 'login' ? 'signup' : 'login');
+              }}
+              className="text-xs text-slate-400 hover:text-blue-400 font-bold transition-colors"
+            >
+              {authMode === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
+            </button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  /* --- LANDING VIEW --- */
   if (view === 'landing') {
     return (
       <div className="min-h-screen bg-[#020617] text-slate-200 flex flex-col items-center justify-center p-6 relative overflow-hidden">
         <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-600/10 blur-[120px] rounded-full" />
-        <div className="max-w-4xl text-center z-10 animate-in fade-in zoom-in-95">
+        <div className="max-w-4xl text-center z-10">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 mb-6 font-bold text-xs">
             <Zap className="w-4 h-4" /> THE SHARK TANK OF INTERVIEWS
           </div>
@@ -460,7 +551,7 @@ const App = () => {
             SWIM TO<br/>SUCCESS.
           </h1>
           <p className="text-xl text-slate-400 mb-10 max-w-xl mx-auto">
-            Interactive AI interview prep with Shark 🦈 mentor, voice answers, live camera simulator, regional drive modules, and custom role drills.
+            Interactive AI interview prep with Shark 🦈 mentor, voice answers, live camera simulator, flashcards, and custom role drills.
           </p>
           <Button onClick={() => setView('dashboard')} icon={Play}>Begin Journey</Button>
         </div>
@@ -469,12 +560,13 @@ const App = () => {
   }
 
   const currentQuestion = questions[currentIndex];
+  const currentFlashcard = flashcards[flashcardIndex];
 
   return (
     <div className="min-h-screen bg-[#020617] text-slate-200 font-sans relative">
       {/* --- DASHBOARD VIEW --- */}
       {view === 'dashboard' && (
-        <div className="max-w-6xl mx-auto p-8 animate-in fade-in slide-in-from-bottom-4">
+        <div className="max-w-6xl mx-auto p-8">
           <div className="mb-12">
             <div className="flex justify-between items-end mb-4">
               <div>
@@ -492,6 +584,13 @@ const App = () => {
                   <span className="text-2xl font-black text-blue-500">{points}</span>
                   <span className="text-slate-600 text-xs font-bold block uppercase tracking-widest">XP Points</span>
                 </div>
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center gap-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 px-3 py-2 rounded-xl text-xs font-bold transition-all ml-2"
+                  title="Log out of application"
+                >
+                  <LogOut className="w-4 h-4" /> Logout
+                </button>
               </div>
             </div>
             <div className="h-4 bg-slate-900 rounded-full border border-slate-800 overflow-hidden relative">
@@ -514,12 +613,10 @@ const App = () => {
             ))}
           </div>
 
-          {/* REGIONAL PLACEMENT & LANGUAGE CONTROLS */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8 bg-slate-900/40 p-6 rounded-3xl border border-slate-800">
+          {/* TARGET ROLE, DRIVE & LEVEL SELECTOR */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12 bg-slate-900/40 p-6 rounded-3xl border border-slate-800">
             <div>
-              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2 flex items-center gap-1">
-                <Target className="w-3.5 h-3.5 text-blue-400" /> Target Position
-              </label>
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2">Target Position</label>
               <select 
                 value={role} 
                 onChange={(e) => setRole(e.target.value)}
@@ -535,11 +632,11 @@ const App = () => {
 
             <div>
               <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2 flex items-center gap-1">
-                <Building2 className="w-3.5 h-3.5 text-purple-400" /> Regional Placement Drive
+                <Building2 className="w-3.5 h-3.5 text-blue-400" /> Target Drive
               </label>
-              <select 
-                value={regionalDrive} 
-                onChange={(e) => setRegionalDrive(e.target.value)}
+              <select
+                value={targetCompany}
+                onChange={(e) => setTargetCompany(e.target.value)}
                 className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500"
               >
                 <option>General MNC</option>
@@ -554,8 +651,8 @@ const App = () => {
               <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2 flex items-center gap-1">
                 <Languages className="w-3.5 h-3.5 text-emerald-400" /> Explanation Language
               </label>
-              <select 
-                value={vernacularLang} 
+              <select
+                value={vernacularLang}
                 onChange={(e) => setVernacularLang(e.target.value)}
                 className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500"
               >
@@ -568,7 +665,7 @@ const App = () => {
 
             <div>
               <label className="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-2">Simulation Difficulty</label>
-              <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-800">
+              <div className="flex bg-slate-900 p-1 rounded-2xl border border-slate-800">
                 {['Beginner', 'Professional', 'Expert'].map((l) => (
                   <button
                     key={l}
@@ -576,7 +673,7 @@ const App = () => {
                       playSFX('click');
                       setLevel(l);
                     }}
-                    className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${level === l ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-slate-400 hover:text-slate-200'}`}
+                    className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition-all ${level === l ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-slate-400 hover:text-slate-200'}`}
                   >
                     {l}
                   </button>
@@ -585,38 +682,114 @@ const App = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
+          {/* PRACTICE ROUND CARDS */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
             {[
               { id: 'Aptitude', title: 'Logic Round', desc: 'Numbers, patterns, and quick reasoning.', icon: Brain, color: 'text-blue-400', bg: 'bg-blue-400/10' },
               { id: 'HR', title: 'HR Round', desc: 'Soft skills & behavioral tests.', icon: UserCircle, color: 'text-purple-400', bg: 'bg-purple-400/10' },
-              { id: 'Daily', title: 'Daily Tasks', desc: 'Keep your brain swimming!', icon: Clock, color: 'text-emerald-400', bg: 'bg-emerald-400/10' }
+              { id: 'Daily', title: 'Daily Tasks', desc: 'Keep your brain swimming!', icon: Clock, color: 'text-emerald-400', bg: 'bg-emerald-400/10' },
+              { id: 'Flashcards', title: 'Rapid Flashcards', desc: 'Flash drill core concept cards before interviews.', icon: Layers, color: 'text-amber-400', bg: 'bg-amber-400/10' }
             ].map((card) => (
-              <Card key={card.id} className="group hover:-translate-y-2 transition-transform duration-300">
-                <div className={`w-14 h-14 ${card.bg} rounded-2xl flex items-center justify-center ${card.color} mb-6`}>
-                  <card.icon className="w-8 h-8" />
+              <Card key={card.id} className="group hover:-translate-y-2 transition-transform duration-300 flex flex-col justify-between">
+                <div>
+                  <div className={`w-14 h-14 ${card.bg} rounded-2xl flex items-center justify-center ${card.color} mb-6`}>
+                    <card.icon className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-2xl font-bold mb-2">{card.title}</h3>
+                  <p className="text-slate-400 text-sm mb-6 leading-relaxed">{card.desc}</p>
                 </div>
-                <h3 className="text-2xl font-bold mb-2">{card.title}</h3>
-                <p className="text-slate-400 text-sm mb-8 leading-relaxed">{card.desc}</p>
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-500 mb-6 bg-slate-800/50 w-fit px-3 py-1 rounded-full border border-slate-700">
-                  <Clock className="w-3 h-3" />
-                  {level === 'Beginner' ? '2:00 Per Q' : level === 'Professional' ? '1:30 Per Q' : '1:00 Per Q'}
+                <div>
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-500 mb-6 bg-slate-800/50 w-fit px-3 py-1 rounded-full border border-slate-700">
+                    <Clock className="w-3 h-3" />
+                    {card.id === 'Flashcards' ? 'Rapid Fire' : level === 'Beginner' ? '2:00 Per Q' : level === 'Professional' ? '1:30 Per Q' : '1:00 Per Q'}
+                  </div>
+                  <Button 
+                    onClick={() => {
+                      if (card.id === 'Daily') getDailyTask();
+                      else if (card.id === 'Flashcards') startFlashcards();
+                      else startSession(card.id);
+                    }} 
+                    loading={loading && (category === card.id || (card.id === 'Daily' && view === 'tasks'))}
+                    className="w-full"
+                  >
+                    Start Round
+                  </Button>
                 </div>
-                <Button 
-                  onClick={() => card.id === 'Daily' ? getDailyTask() : startSession(card.id)} 
-                  loading={loading && (category === card.id || (card.id === 'Daily' && view === 'tasks'))}
-                  className="w-full"
-                >
-                  Start Round
-                </Button>
               </Card>
             ))}
           </div>
         </div>
       )}
 
+      {/* --- RAPID WARMUP FLASHCARDS VIEW --- */}
+      {view === 'flashcards' && currentFlashcard && (
+        <div className="min-h-screen flex items-center justify-center p-6">
+          <Card className="max-w-xl w-full relative">
+            <div className="flex items-center justify-between mb-6 border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-2 text-amber-400 font-bold text-xs uppercase tracking-widest">
+                <Layers className="w-4 h-4" /> Rapid Warmup ({flashcardIndex + 1}/{flashcards.length})
+              </div>
+              <Button onClick={() => setView('dashboard')} variant="secondary" className="px-3 py-1 text-xs">Exit Deck</Button>
+            </div>
+
+            <div 
+              onClick={() => {
+                playSFX('click');
+                setIsFlipped(!isFlipped);
+              }}
+              className="cursor-pointer min-h-[260px] bg-slate-950/80 border-2 border-slate-800 hover:border-amber-500/50 rounded-2xl p-8 flex flex-col justify-center items-center text-center transition-all duration-300 hover:shadow-2xl relative mb-6"
+            >
+              <div className="absolute top-3 right-3 flex items-center gap-1 text-[10px] text-slate-500 font-bold uppercase tracking-wider bg-slate-900 px-2.5 py-1 rounded-full border border-slate-800">
+                <RotateCw className="w-3 h-3 text-amber-400" /> Click to Flip
+              </div>
+
+              {!isFlipped ? (
+                <div>
+                  <span className="text-xs font-bold text-amber-400/80 uppercase tracking-widest block mb-3">CONCEPT QUESTION</span>
+                  <h3 className="text-2xl font-bold text-white leading-snug">{currentFlashcard.question}</h3>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest block mb-2">SOLUTION & INSIGHT</span>
+                  <p className="text-slate-200 font-medium text-base leading-relaxed">{currentFlashcard.answer}</p>
+                  {currentFlashcard.keyPoints && currentFlashcard.keyPoints.length > 0 && (
+                    <div className="pt-3 border-t border-slate-800/80 text-left">
+                      {currentFlashcard.keyPoints.map((pt, i) => (
+                        <div key={i} className="text-xs text-slate-400 flex items-start gap-1.5 mb-1">
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                          <span>{pt}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Button 
+                onClick={() => nextFlashcard(false)} 
+                variant="secondary" 
+                icon={Repeat}
+                className="w-full text-xs"
+              >
+                Needs Review
+              </Button>
+              <Button 
+                onClick={() => nextFlashcard(true)} 
+                icon={Check}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-xs"
+              >
+                Mastered (+10 XP)
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
       {/* --- TASKS VIEW --- */}
       {view === 'tasks' && dailyTask && (
-        <div className="min-h-screen flex items-center justify-center p-6 animate-in slide-in-from-top-4">
+        <div className="min-h-screen flex items-center justify-center p-6">
           <Card className="max-w-2xl w-full border-emerald-500/20">
             <div className="flex items-center gap-3 mb-6">
               <Lightbulb className="w-8 h-8 text-emerald-400" />
@@ -630,10 +803,9 @@ const App = () => {
             </div>
           </Card>
 
-          {/* Solution Modal */}
           {showSolutionModal && (
             <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
-              <div className="bg-slate-900 border border-slate-700 p-8 rounded-3xl max-w-lg w-full animate-in zoom-in-95">
+              <div className="bg-slate-900 border border-slate-700 p-8 rounded-3xl max-w-lg w-full">
                 <h4 className="text-2xl font-bold text-white mb-4">Solution</h4>
                 <p className="text-slate-300 mb-6 leading-relaxed">{dailyTask.solution}</p>
                 <Button onClick={() => setShowSolutionModal(false)} className="w-full">Got it!</Button>
@@ -643,162 +815,108 @@ const App = () => {
         </div>
       )}
 
-      {/* --- INTERVIEW VIEW --- */}
-      {view === 'interview' && currentQuestion && (
-        <div className="min-h-screen flex items-center justify-center p-6 animate-in zoom-in-95">
-          <Card className="max-w-4xl w-full relative overflow-hidden">
-            
-            {/* INTERVIEW TOOLBAR: SPEECH READOUT, CAM SIMULATOR, SCRATCHPAD, WHITEBOARD */}
-            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-6 mb-8">
-              <div className="flex items-center gap-3">
-                <span className="text-blue-400 font-mono text-xs font-bold uppercase tracking-widest">Question {currentIndex + 1} / 5</span>
-                <button 
-                  onClick={() => speakText(currentQuestion.question)}
-                  className="text-slate-400 hover:text-blue-400 transition-colors p-1"
-                  title="Read Question Aloud"
-                >
-                  {isSpeaking ? <VolumeX className="w-5 h-5 text-blue-400 animate-pulse" /> : <Volume2 className="w-5 h-5" />}
-                </button>
-              </div>
+     {/* --- INTERVIEW VIEW --- */}
+{view === 'interview' && currentQuestion && (
+  <div className="min-h-screen flex items-center justify-center p-6">
+    <Card className="max-w-4xl w-full relative overflow-hidden">
+      
+      {/* Question Header & Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-6 mb-8">
+        <div className="flex items-center gap-3">
+          <span className="text-blue-400 font-mono text-xs font-bold uppercase tracking-widest">
+            Question {currentIndex + 1} / 5
+          </span>
+          <button 
+            onClick={() => speakText(currentQuestion.question)}
+            className="text-slate-400 hover:text-blue-400 transition-colors p-1"
+            title="Read Question Aloud"
+          >
+            {isSpeaking ? <VolumeX className="w-5 h-5 text-blue-400 animate-pulse" /> : <Volume2 className="w-5 h-5" />}
+          </button>
+        </div>
+      </div>
 
-              <div className="flex flex-wrap items-center gap-3">
-                <button 
-                  onClick={toggleCam}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${isCamActive ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
-                >
-                  {isCamActive ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
-                  {isCamActive ? 'Disable Cam' : 'Enable Pressure Cam'}
-                </button>
+      {/* AI Pressure Camera Component */}
+      <div className="mb-6">
+        <PressureCam />
+      </div>
 
-                <button 
-                  onClick={() => {
-                    setShowScratchpad(!showScratchpad);
-                    if (showWhiteboard) setShowWhiteboard(false);
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${showScratchpad ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
-                >
-                  <Code className="w-4 h-4" /> Scratchpad
-                </button>
+      {/* Question Title */}
+      <h2 className="text-2xl md:text-3xl font-bold mb-8 text-white">
+        {currentQuestion.question}
+      </h2>
 
-                <button 
-                  onClick={() => {
-                    setShowWhiteboard(!showWhiteboard);
-                    if (showScratchpad) setShowScratchpad(false);
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${showWhiteboard ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
-                >
-                  <Edit3 className="w-4 h-4" /> Whiteboard
-                </button>
-
-                <div className={`flex flex-col items-end ${timeLeft <= 10 ? 'text-red-500 animate-pulse' : 'text-blue-400'}`}>
-                  <div className="text-3xl font-mono font-black tabular-nums">{Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}</div>
-                </div>
-              </div>
-            </div>
-
-            {/* LIVE WEBCAM OVERLAY OR SIMULATED FALLBACK */}
-            {isCamActive && (
-              <div className="mb-6 rounded-2xl overflow-hidden border border-slate-700 h-44 bg-black relative flex items-center justify-center">
-                {isMockCam ? (
-                  <div className="text-center p-4">
-                    <Video className="w-8 h-8 text-blue-500 mx-auto mb-2 animate-pulse" />
-                    <span className="text-xs font-mono text-slate-400">Simulated Pressure Cam Active</span>
-                  </div>
-                ) : (
-                  <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-                )}
-                <span className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-[10px] text-emerald-400 font-mono flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" /> REC • Live Prep
-                </span>
-              </div>
-            )}
-
-            <h2 className="text-2xl md:text-3xl font-bold mb-8 text-white">{currentQuestion.question}</h2>
-
-            {/* SCRATCHPAD AREA (TEXTAREA FIX INCLUDED) */}
-            {showScratchpad && (
-              <div className="mb-6 animate-in fade-in">
-                <textarea
-                  value={scratchpad}
-                  onChange={(e) => setScratchpad(e.target.value)}
-                  placeholder="Scratchpad for code snippets or logic thoughts..."
-                  className="w-full h-32 bg-slate-950 font-mono text-sm text-emerald-400 p-4 rounded-xl border border-slate-800 outline-none focus:border-blue-500"
-                />
-              </div>
-            )}
-
-            {/* CANVAS WHITEBOARD AREA (CANVAS WIPE FIX INCLUDED) */}
-            {showWhiteboard && (
-              <div className="mb-6 animate-in fade-in relative">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-xs text-slate-400 font-mono">Drawing Board (Touch & Mouse Supported)</span>
-                  <button onClick={clearCanvas} className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1">
-                    <Trash2 className="w-3.5 h-3.5" /> Clear Canvas
-                  </button>
-                </div>
-                <canvas
-                  ref={canvasRef}
-                  width={700}
-                  height={200}
-                  onMouseDown={startDrawing}
-                  onMouseMove={draw}
-                  onMouseUp={stopDrawing}
-                  onMouseLeave={stopDrawing}
-                  onTouchStart={startDrawing}
-                  onTouchMove={draw}
-                  onTouchEnd={stopDrawing}
-                  className="w-full bg-slate-950 rounded-xl border border-slate-800 touch-none cursor-crosshair"
-                />
-              </div>
-            )}
-
-            {currentQuestion.options && Array.isArray(currentQuestion.options) ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
-                {currentQuestion.options.map((opt, i) => (
-                  <button
-                    key={i}
-                    onClick={() => {
-                      playSFX('click');
-                      setUserAnswers({...userAnswers, [currentIndex]: opt});
-                    }}
-                    className={`text-left p-5 rounded-2xl border-2 transition-all font-bold ${userAnswers[currentIndex] === opt ? 'bg-blue-600 border-blue-400 shadow-xl translate-x-1' : 'bg-slate-800/40 border-slate-700 hover:border-slate-500'}`}
-                  >
-                    <span className="mr-3 text-slate-400">{String.fromCharCode(65 + i)}.</span> {opt}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="relative mb-10">
-                <textarea
-                  className="w-full h-48 bg-slate-800/50 border-2 border-slate-700 rounded-2xl p-6 outline-none focus:border-blue-500 text-lg text-white pr-14"
-                  placeholder="Type or use speech-to-text..."
-                  value={userAnswers[currentIndex] || ''}
-                  onChange={(e) => setUserAnswers({...userAnswers, [currentIndex]: e.target.value})}
-                />
-                {speechSupported && (
-                  <button
-                    onClick={toggleListening}
-                    className={`absolute right-4 top-4 p-3 rounded-xl transition-all ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-700 text-slate-300 hover:text-white'}`}
-                    title="Dictate Answer"
-                  >
-                    {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                  </button>
-                )}
-              </div>
-            )}
-
-            <div className="flex justify-end">
-              <Button onClick={() => currentIndex === 4 ? submitInterview() : (setCurrentIndex(prev => prev + 1), setTimeLeft(getLevelTime()))} loading={loading}>
-                {currentIndex === 4 ? 'Submit Simulation' : 'Next Question'}
-              </Button>
-            </div>
-          </Card>
+      {/* Scratchpad Overlay */}
+      {showScratchpad && (
+        <div className="mb-6">
+          <textarea
+            value={scratchpad}
+            onChange={(e) => setScratchpad(e.target.value)}
+            placeholder="Scratchpad for code snippets or logic thoughts..."
+            className="w-full h-32 bg-slate-950 font-mono text-sm text-emerald-400 p-4 rounded-xl border border-slate-800 outline-none focus:border-blue-500"
+          />
         </div>
       )}
 
+      {/* Options List / Text Input */}
+      {currentQuestion.options && Array.isArray(currentQuestion.options) ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
+          {currentQuestion.options.map((opt, i) => (
+            <button
+              key={i}
+              onClick={() => {
+                playSFX('click');
+                setUserAnswers({...userAnswers, [currentIndex]: opt});
+              }}
+              className={`text-left p-5 rounded-2xl border-2 transition-all font-bold ${
+                userAnswers[currentIndex] === opt 
+                  ? 'bg-blue-600 border-blue-400 shadow-xl translate-x-1' 
+                  : 'bg-slate-800/40 border-slate-700 hover:border-slate-500'
+              }`}
+            >
+              <span className="mr-3 text-slate-400">{String.fromCharCode(65 + i)}.</span> {opt}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="relative mb-10">
+          <textarea
+            className="w-full h-48 bg-slate-800/50 border-2 border-slate-700 rounded-2xl p-6 outline-none focus:border-blue-500 text-lg text-white pr-14"
+            placeholder="Type or use speech-to-text..."
+            value={userAnswers[currentIndex] || ''}
+            onChange={(e) => setUserAnswers({...userAnswers, [currentIndex]: e.target.value})}
+          />
+          {speechSupported && (
+            <button
+              onClick={toggleListening}
+              className={`absolute right-4 top-4 p-3 rounded-xl transition-all ${
+                isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-700 text-slate-300 hover:text-white'
+              }`}
+              title="Dictate Answer"
+            >
+              {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Action Button */}
+      <div className="flex justify-end">
+        <Button 
+          onClick={() => currentIndex === 4 ? submitInterview() : (setCurrentIndex(prev => prev + 1), setTimeLeft(getLevelTime()))} 
+          loading={loading}
+        >
+          {currentIndex === 4 ? 'Submit Simulation' : 'Next Question'}
+        </Button>
+      </div>
+
+    </Card>
+  </div>
+)}
+
       {/* --- RESULTS VIEW --- */}
       {view === 'result' && feedback && (
-        <div className="max-w-5xl mx-auto p-8 animate-in fade-in">
+        <div className="max-w-5xl mx-auto p-8">
           <div className="text-center mb-12">
             <div className="text-9xl font-black text-blue-500 mb-2 drop-shadow-2xl">{feedback.score}%</div>
             <h2 className="text-3xl font-bold uppercase tracking-widest">Final Assessment</h2>
@@ -806,11 +924,11 @@ const App = () => {
           <div className="grid lg:grid-cols-3 gap-8 mb-12">
             <div className="lg:col-span-1 space-y-6">
                <div className="bg-emerald-500/10 p-6 rounded-3xl border border-emerald-500/20">
-                 <h4 className="font-black text-emerald-400 text-xs mb-3 uppercase">STRENGTHS</h4>
+                 <h4 className="font-black text-emerald-400 text-xs mb-3">STRENGTHS</h4>
                  <ul className="text-xs space-y-2">{feedback.strengths?.map((s,i) => <li key={i}>• {s}</li>)}</ul>
                </div>
                <div className="bg-red-500/10 p-6 rounded-3xl border border-red-500/20">
-                 <h4 className="font-black text-red-400 text-xs mb-3 uppercase">WEAKNESSES</h4>
+                 <h4 className="font-black text-red-400 text-xs mb-3">WEAKNESSES</h4>
                  <ul className="text-xs space-y-2">{feedback.weaknesses?.map((w,i) => <li key={i}>• {w}</li>)}</ul>
                </div>
             </div>
@@ -834,9 +952,7 @@ const App = () => {
       {/* --- SHARK CHATBOT 🦈 --- */}
       <div className="fixed bottom-6 right-6 z-[100] flex flex-col items-end">
         {isChatOpen && (
-          <div className="w-80 md:w-96 h-[500px] bg-slate-900 border border-slate-700 rounded-3xl shadow-2xl flex flex-col mb-4 animate-in slide-in-from-bottom-10">
-            
-            {/* CHAT HEADER & PERSONALITY SELECTOR */}
+          <div className="w-80 md:w-96 h-[500px] bg-slate-900 border border-slate-700 rounded-3xl shadow-2xl flex flex-col mb-4">
             <div className="p-4 bg-gradient-to-r from-blue-700 to-blue-900 rounded-t-3xl flex flex-col gap-2">
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2">
@@ -849,7 +965,6 @@ const App = () => {
                 <button onClick={() => setIsChatOpen(false)}><XCircle className="w-5 h-5 text-white/50 hover:text-white" /></button>
               </div>
 
-              {/* Persona buttons */}
               <div className="flex gap-1 bg-black/30 p-1 rounded-xl">
                 {['funny', 'ruthless', 'supportive', 'zen'].map((p) => (
                   <button
