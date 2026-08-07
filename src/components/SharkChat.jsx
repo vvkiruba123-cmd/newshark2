@@ -86,4 +86,4 @@ const SharkChat = ({ isOpen, onClose }) => {
   );
 };
 
-export default SharkChat;4
+export default SharkChat;

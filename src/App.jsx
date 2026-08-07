@@ -13,7 +13,9 @@ import PressureCam from './components/PressureCam';
 import StudyMaterial from './components/StudyMaterial';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
+// Fixed API endpoint using a reliable model identifier
+// Replace whatever model string you have on line 17 with:
+const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${API_KEY}`;
 
 // Native Web Audio Synthesizer for SFX
 const playSFX = (type) => {
@@ -170,7 +172,7 @@ const App = () => {
         .from('profiles')
         .select('*')
         .eq('user_id', user.id)
-        .single();
+        .maybeSingle();
 
       if (error) {
         console.error("Supabase Error:", error.message);
@@ -185,11 +187,10 @@ const App = () => {
   }, [user]);
 
   // --- START SIMULATION FUNCTION ---
-  const startSimulation = (role) => {
+  const startSimulation = (selectedRole) => {
     playSFX('click');
-    setRole(role); // or setSelectedRole(role) depending on your variable name
+    setRole(selectedRole);
 
-    // Request Fullscreen on round start
     if (document.documentElement.requestFullscreen) {
       document.documentElement.requestFullscreen().catch(() => {});
     }
@@ -197,18 +198,17 @@ const App = () => {
     setCurrentIndex(0);
     setUserAnswers({});
     setTimeLeft(110);
-    setView('simulation'); // or 'interview' depending on your view state
+    setView('simulation');
   };
 
   // --- ANTI-CHEAT TAB SWITCH DETECTOR ---
   useEffect(() => {
-    if (view !== 'simulation' && view !== 'interview') return; // Only active during test
+    if (view !== 'simulation' && view !== 'interview') return;
 
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        // Deduct 50 XP penalty
         setPoints((prev) => Math.max(0, prev - 50));
-        playSFX('incorrect');
+        playSFX('warn');
         alert('⚠️ Tab switch detected! You lost 50 XP for leaving the interview window.');
       }
     };
@@ -332,6 +332,12 @@ const App = () => {
   };
 
   // --- TIMER LOGIC ---
+  const getLevelTime = useCallback(() => {
+    if (level === 'Beginner') return 120;
+    if (level === 'Professional') return 90;
+    return 60;
+  }, [level]);
+
   useEffect(() => {
     let interval = null;
     if (isTimerActive && timeLeft > 0) {
@@ -351,14 +357,7 @@ const App = () => {
       }
     }
     return () => clearInterval(interval);
-  }, [isTimerActive, timeLeft, currentIndex]);
-
-  // --- UTILS ---
-  const getLevelTime = useCallback(() => {
-    if (level === 'Beginner') return 120;
-    if (level === 'Professional') return 90;
-    return 60;
-  }, [level]);
+  }, [isTimerActive, timeLeft, currentIndex, getLevelTime]);
 
   const scrollToBottom = () => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -368,7 +367,7 @@ const App = () => {
     scrollToBottom();
   }, [chatHistory]);
 
-  // --- AI LOGIC ---
+  // --- AI LOGIC (ROBUST FETCH WITH ERROR HANDLING) ---
   const callAI = async (prompt, isJson = true) => {
     try {
       const response = await fetch(API_URL, {
@@ -382,7 +381,10 @@ const App = () => {
       });
 
       const rawText = await response.text();
-      if (!response.ok) throw new Error("API request failed");
+      if (!response.ok) {
+        console.error("API Error Response:", rawText);
+        throw new Error("API request failed with status " + response.status);
+      }
 
       const data = JSON.parse(rawText);
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -762,25 +764,28 @@ const App = () => {
               </Card>
             ))}
           </div>
+          
           {/* STUDY VAULT BUTTON */}
-<button 
-  onClick={() => setView('study')}
-  className="p-4 rounded-2xl bg-slate-900 border border-slate-800 hover:border-blue-500/50 transition-all flex items-center gap-3 text-left group col-span-full md:col-span-2"
->
-  <div className="p-3 bg-blue-500/10 text-blue-400 rounded-xl group-hover:bg-blue-500 group-hover:text-white transition-all">
-    <BookOpen className="w-6 h-6" />
-  </div>
-  <div>
-    <h3 className="font-bold text-white">Study Vault</h3>
-    <p className="text-xs text-slate-400">Quantitative aptitude formulas & tricks</p>
-  </div>
-</button>
+          <button 
+            onClick={() => setView('study')}
+            className="p-4 rounded-2xl bg-slate-900 border border-slate-800 hover:border-blue-500/50 transition-all flex items-center gap-3 text-left group col-span-full md:col-span-2"
+          >
+            <div className="p-3 bg-blue-500/10 text-blue-400 rounded-xl group-hover:bg-blue-500 group-hover:text-white transition-all">
+              <BookOpen className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-bold text-white">Study Vault</h3>
+              <p className="text-xs text-slate-400">Quantitative aptitude formulas & tricks</p>
+            </div>
+          </button>
         </div>
       )}
-{/* --- STUDY MATERIAL VIEW --- */}
-{view === 'study' && (
-  <StudyMaterial onBack={() => setView('dashboard')} />
-)}
+
+      {/* --- STUDY MATERIAL VIEW --- */}
+      {view === 'study' && (
+        <StudyMaterial onBack={() => setView('dashboard')} />
+      )}
+
       {/* --- RAPID WARMUP FLASHCARDS VIEW --- */}
       {view === 'flashcards' && currentFlashcard && (
         <div className="min-h-screen flex items-center justify-center p-6">
@@ -875,104 +880,104 @@ const App = () => {
         </div>
       )}
 
-     {/* --- INTERVIEW VIEW --- */}
-{view === 'interview' && currentQuestion && (
-  <div className="min-h-screen flex items-center justify-center p-6">
-    <Card className="max-w-4xl w-full relative overflow-hidden">
-      
-      {/* Question Header & Controls */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-6 mb-8">
-        <div className="flex items-center gap-3">
-          <span className="text-blue-400 font-mono text-xs font-bold uppercase tracking-widest">
-            Question {currentIndex + 1} / 5
-          </span>
-          <button 
-            onClick={() => speakText(currentQuestion.question)}
-            className="text-slate-400 hover:text-blue-400 transition-colors p-1"
-            title="Read Question Aloud"
-          >
-            {isSpeaking ? <VolumeX className="w-5 h-5 text-blue-400 animate-pulse" /> : <Volume2 className="w-5 h-5" />}
-          </button>
-        </div>
-      </div>
+      {/* --- INTERVIEW VIEW --- */}
+      {view === 'interview' && currentQuestion && (
+        <div className="min-h-screen flex items-center justify-center p-6">
+          <Card className="max-w-4xl w-full relative overflow-hidden">
+            
+            {/* Question Header & Controls */}
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-6 mb-8">
+              <div className="flex items-center gap-3">
+                <span className="text-blue-400 font-mono text-xs font-bold uppercase tracking-widest">
+                  Question {currentIndex + 1} / 5
+                </span>
+                <button 
+                  onClick={() => speakText(currentQuestion.question)}
+                  className="text-slate-400 hover:text-blue-400 transition-colors p-1"
+                  title="Read Question Aloud"
+                >
+                  {isSpeaking ? <VolumeX className="w-5 h-5 text-blue-400 animate-pulse" /> : <Volume2 className="w-5 h-5" />}
+                </button>
+              </div>
+            </div>
 
-      {/* AI Pressure Camera Component */}
-      <div className="mb-6">
-        <PressureCam />
-      </div>
+            {/* AI Pressure Camera Component */}
+            <div className="mb-6">
+              <PressureCam />
+            </div>
 
-      {/* Question Title */}
-      <h2 className="text-2xl md:text-3xl font-bold mb-8 text-white">
-        {currentQuestion.question}
-      </h2>
+            {/* Question Title */}
+            <h2 className="text-2xl md:text-3xl font-bold mb-8 text-white">
+              {currentQuestion.question}
+            </h2>
 
-      {/* Scratchpad Overlay */}
-      {showScratchpad && (
-        <div className="mb-6">
-          <textarea
-            value={scratchpad}
-            onChange={(e) => setScratchpad(e.target.value)}
-            placeholder="Scratchpad for code snippets or logic thoughts..."
-            className="w-full h-32 bg-slate-950 font-mono text-sm text-emerald-400 p-4 rounded-xl border border-slate-800 outline-none focus:border-blue-500"
-          />
+            {/* Scratchpad Overlay */}
+            {showScratchpad && (
+              <div className="mb-6">
+                <textarea
+                  value={scratchpad}
+                  onChange={(e) => setScratchpad(e.target.value)}
+                  placeholder="Scratchpad for code snippets or logic thoughts..."
+                  className="w-full h-32 bg-slate-950 font-mono text-sm text-emerald-400 p-4 rounded-xl border border-slate-800 outline-none focus:border-blue-500"
+                />
+              </div>
+            )}
+
+            {/* Options List / Text Input */}
+            {currentQuestion.options && Array.isArray(currentQuestion.options) ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
+                {currentQuestion.options.map((opt, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      playSFX('click');
+                      setUserAnswers({...userAnswers, [currentIndex]: opt});
+                    }}
+                    className={`text-left p-5 rounded-2xl border-2 transition-all font-bold ${
+                      userAnswers[currentIndex] === opt 
+                        ? 'bg-blue-600 border-blue-400 shadow-xl translate-x-1' 
+                        : 'bg-slate-800/40 border-slate-700 hover:border-slate-500'
+                    }`}
+                  >
+                    <span className="mr-3 text-slate-400">{String.fromCharCode(65 + i)}.</span> {opt}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="relative mb-10">
+                <textarea
+                  className="w-full h-48 bg-slate-800/50 border-2 border-slate-700 rounded-2xl p-6 outline-none focus:border-blue-500 text-lg text-white pr-14"
+                  placeholder="Type or use speech-to-text..."
+                  value={userAnswers[currentIndex] || ''}
+                  onChange={(e) => setUserAnswers({...userAnswers, [currentIndex]: e.target.value})}
+                />
+                {speechSupported && (
+                  <button
+                    onClick={toggleListening}
+                    className={`absolute right-4 top-4 p-3 rounded-xl transition-all ${
+                      isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-700 text-slate-300 hover:text-white'
+                    }`}
+                    title="Dictate Answer"
+                  >
+                    {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Action Button */}
+            <div className="flex justify-end">
+              <Button 
+                onClick={() => currentIndex === 4 ? submitInterview() : (setCurrentIndex(prev => prev + 1), setTimeLeft(getLevelTime()))} 
+                loading={loading}
+              >
+                {currentIndex === 4 ? 'Submit Simulation' : 'Next Question'}
+              </Button>
+            </div>
+
+          </Card>
         </div>
       )}
-
-      {/* Options List / Text Input */}
-      {currentQuestion.options && Array.isArray(currentQuestion.options) ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
-          {currentQuestion.options.map((opt, i) => (
-            <button
-              key={i}
-              onClick={() => {
-                playSFX('click');
-                setUserAnswers({...userAnswers, [currentIndex]: opt});
-              }}
-              className={`text-left p-5 rounded-2xl border-2 transition-all font-bold ${
-                userAnswers[currentIndex] === opt 
-                  ? 'bg-blue-600 border-blue-400 shadow-xl translate-x-1' 
-                  : 'bg-slate-800/40 border-slate-700 hover:border-slate-500'
-              }`}
-            >
-              <span className="mr-3 text-slate-400">{String.fromCharCode(65 + i)}.</span> {opt}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <div className="relative mb-10">
-          <textarea
-            className="w-full h-48 bg-slate-800/50 border-2 border-slate-700 rounded-2xl p-6 outline-none focus:border-blue-500 text-lg text-white pr-14"
-            placeholder="Type or use speech-to-text..."
-            value={userAnswers[currentIndex] || ''}
-            onChange={(e) => setUserAnswers({...userAnswers, [currentIndex]: e.target.value})}
-          />
-          {speechSupported && (
-            <button
-              onClick={toggleListening}
-              className={`absolute right-4 top-4 p-3 rounded-xl transition-all ${
-                isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-700 text-slate-300 hover:text-white'
-              }`}
-              title="Dictate Answer"
-            >
-              {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Action Button */}
-      <div className="flex justify-end">
-        <Button 
-          onClick={() => currentIndex === 4 ? submitInterview() : (setCurrentIndex(prev => prev + 1), setTimeLeft(getLevelTime()))} 
-          loading={loading}
-        >
-          {currentIndex === 4 ? 'Submit Simulation' : 'Next Question'}
-        </Button>
-      </div>
-
-    </Card>
-  </div>
-)}
 
       {/* --- RESULTS VIEW --- */}
       {view === 'result' && feedback && (
